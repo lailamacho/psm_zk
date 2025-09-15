@@ -1,0 +1,221 @@
+---
+title: "Úkoly PSM: Mnohorozměrná statistika"
+author: "Laila Machová"
+output:
+  html_document: 
+    toc: yes
+    toc_depth: '2'
+    theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Načtení knihoven a dat
+
+```{r}
+{library(DescTools)}
+library(MASS)
+```
+
+```{r}
+wineUrl <- 'http://archive.ics.uci.edu/ml/machine-learning-databases/wine/wine.data'
+wine <- read.table(wineUrl, header=FALSE, sep=',', stringsAsFactors=FALSE,
+                   col.names=c('Cultivar', 'Alcohol', 'Malic.acid','Ash', 'Alcalinity.of.ash',
+                               'Magnesium', 'Total.phenols','Flavanoids', 'Nonflavanoid.phenols',
+                               'Proanthocyanin', 'Color.intensity', 'Hue', 'OD280.OD315.of.diluted.wines',
+                               'Proline'))
+```
+
+## Úkol 1: Je významný rozdíl mezi jednotlivými odrůdami v jejich chemickém složení? Ve které charakteristice se odrůdy nejvíce odlišují?
+
+Rozdělíme si data na kategorická a číselná. Kategorická představuje sloupec označující odrůdu (Cultivar), číselná jsou ostatní proměnné.
+
+```{r}
+odruda <- as.factor(wine$Cultivar)  # kategorická
+# číselné proměnné (chemické složení): as.matrix(wine[,-1])
+```
+
+Pro zjištění rozdílů mezi proměnnými použijeme metodu **MANOVA**.
+
+```{r}
+fit <- manova(as.matrix(wine[,-1]) ~ odruda)
+```
+
+Dále si vypíšeme jednorozměrné analýzy rozptylů pro každou proměnnou zvlášť.
+
+```{r}
+summary.aov(fit)
+```
+
+Pro určení, ve které charakteristice se odrůdy nejvíce odlišují hledáme proměnné s nejmenší p-hodnotou a největším F-stat. To splňují proměnné (top 3): *Flavonoids*, *Proline*, *OD280.OD315*.
+
+### Testová statistika
+
+Určíme si hypotézy:
+-   H_0: Mezi odrůdami není statisticky významný rozdíl (vektory středních hodnot se rovnají)
+-   H_1: Mezi odrůdami je statisticky významný rodíl (vektory středních hodnot se liší)
+
+Použiji Wilkovu lambdu:
+
+```{r}
+summary(fit, test="Wilks")
+```
+
+P-hodnota je menší než alfa = 0.05, tudíž zamítáme nulovou hypotézu.
+
+**Závěr**: Mezi odrůdami existuje významný rozdíl.
+
+## Úkol 2: Pokuste se data zjednodušit, tj. najít několik málo nových proměnných, které když použiji namísto těch stávajících, tak ztratím co nejméně informace. Kolik takových proměnných potřebuji? A je možné je nějak interpretovat? Najděte rozumný počet nových proměnných, které nějakou interpretaci mít budou. Jejich počet se může lišit od doporučeného čísla. Kolik procent informace tyto proměnné obsahují?
+
+Pro zjednodušení dat použijeme metodu hlavních komponent (PCA).
+
+Nejdříve vytvoříme korelační matici a vypočteme vlastní čísla a vlastní vektory této matice.
+
+```{r, results="hide"}
+cor(wine)
+eigen(cor(wine))
+```
+
+Vytvoření komponent:
+```{r}
+wine_pca <- prcomp(wine[,-1], scale = TRUE)
+```
+
+Dále si vykreslíme screenplot pro znázornění optimálního počtu hlavních komponent, ten odpovídá počtu vlastních čísel korelační matice větších než 1 (Kaiserovo kritérium).
+
+```{r, fig.width=8, fig.height=6}
+screeplot(wine_pca, type="l")
+abline(h=1, col="red")
+```
+
+V našem případě je tento počet **3**.
+
+Nyní spočteme kumulativní podíl vysvětlené variace.
+```{r}
+cumsum(eigen(cor(wine))$values / sum(eigen(cor(wine))$values))
+```
+
+Z výsledku vidíme, že první tři komponenty vysvětlují 67,7 % variability.
+
+Jako další krok provedeme **faktorovou annalýzu**.
+
+```{r}
+wine_fa <- factanal(wine[,-1], factors = 3, rotation = "varimax")
+wine_fa
+```
+
+Z výsledků můžeme určit tři faktory:
+
+-   Factor1 - proměnné *Flavanoids*, *OD280.OD315*, *Total.phenols* – představuje hořkost vína
+-   Factor2 - proměnné *Alcohol*, *Color.intensity*, *Proline* – představuje styl vína / hutnost chuti vína
+-   Factor3 - proměnné *Alcalinity.of.ash*, *Ash* – představuje zásaditost vína
+
+Pozn.: Proměnné korelující s faktorem určujeme dle hodnoty loadingů (hledáme vysoké hodnoty)
+
+Vizualizace:
+```{r, fig.width=6, fig.height=6}
+biplot(wine_pca, xlabs=wine$Cultivar)
+```
+
+## Úkol 3: Je možné na základě chemické analýzy vzorku vína poznat, ke které odrůdě víno patří? Určete vhodnou funkci / funkce, které Vám neznámý vzorek pomohou přiřadit ke správné skupině. Jak je taková rozhodovací funkce dobrá? A kolik takovýchto funkcí potřebujete?
+
+Nejprve si data rozdělíme na trénovací a testovací.
+
+```{r}
+set.seed(0)
+idx <- sample(1:nrow(wine), 0.7*nrow(wine))
+train_data <- wine[idx, ]
+test_data  <- wine[-idx, ]
+```
+
+Použijeme **lineární diskriminační analýzu**.
+
+```{r}
+lda_fit <- lda(Cultivar ~ ., data = train_data)
+lda_fit
+```
+
+Predikce:
+```{r}
+pred <- predict(lda_fit, newdata = test_data)$class
+```
+
+Pro vyhodnocení přesnosti klasifikace si vykreslíme confusion matrix a vypočteme accuracy.
+
+```{r}
+confusion_matrix <- table(Actual = test_data$Cultivar, Predicted = pred)
+confusion_matrix
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+accuracy
+```
+
+Můžeme vidět, že s LDA lze určit odrůdu se 100% přesností.
+
+Nakonec zjistíme, kolik diskriminačních funkcní je potřeba.
+
+```{r}
+num_lda_functions <- ncol(lda_fit$scaling)
+num_lda_functions
+```
+
+Počet diskriminačních funkcí v tomto případě je **2**.
+
+## Úkol 4: V tomto případě pracujte bez znalosti odrůdy a jen na základě číselných proměnných rozdělte data do skupin. Porovnejte více variant dělení do skupin (různé metody, různé počty skupin, ...) a jedno dělení vyberte jako optimální. Kolik skupin máte? A jak byste tyto skupiny charakterizovali?
+
+Pracujeme pouze s číselnými proměnnými, hodnoty škálujeme.
+
+```{r}
+wine_num_sc <- scale(wine[,-1])
+```
+
+Provedeme nejdříve **hierarchické shlukování**:
+
+-   al = average linkage
+-   cl = complete linkage
+-   ward = wardova metoda
+
+```{r}
+hc_al <- hclust(dist(wine_num_sc), method = "average")
+plot(hc_al, main = "Dendrogram - Average Linkage", hang = -1)
+hc_cl <- hclust(dist(wine_num_sc), method = "complete")
+plot(hc_cl, main = "Dendrogram - Complete Linkage", hang = -1)
+hc_ward <- hclust(dist(wine_num_sc), method = "ward.D2")
+plot(hc_ward, main = "Dendrogram - Ward's Method", hang = -1)
+num_clusters_hclust <- 3
+clusters_hclust <- cutree(hc_ward, k = num_clusters_hclust)
+```
+
+Nyní provedme shlukování metodou **K-means**, počet skupin (center) zvolíme 3.
+
+```{r}
+clusters_kmeans <- kmeans(wine_num_sc, centers = 3)
+```
+
+Výsledky obou metod porovnáme s původními daty pro určení přesnosti.
+
+-   Srovnání hierarchického shlukování (Ward) s původními daty:
+    <div>
+    ```{r}
+    table(wine$Cultivar, clusters_hclust)
+    ```
+    </div>
+
+-   Srovnání K-means shlukování s původními daty:
+    <div>
+    ```{r}
+    table(wine$Cultivar, clusters_kmeans$cluster)
+    ```
+    </div>
+
+Z výsledků vidíme, že obě metody fungují dobře, ovšem metoda K-means má výsledky o něco lepší.
+
+Charakteristika shluků – skupin:
+```{r}
+clusters_kmeans$centers
+```
+
+-   Skupina 1 – charakterizována vysokou hodnotou *proline*, vyšším obsahem *flavonoidů* a *alkoholu*
+-   Skupina 2 – charakterizována nejnižší mírou *alkoholu*, *intensity barvy* i obsahu *fenolů*
+-   Skupina 3 – charakterizována vysokou *intenzitou barvy*, vysokým obsahem *kyseliny jablečné* (Malic.acid), zároveň nejnižším obsahem *flavonoidů*
